@@ -1,0 +1,58 @@
+# x402 Reverse Proxy Configuration
+# This file configures the proxy server, upstream target, rate limits, and x402 payments.
+
+[server]
+# Address and port to bind the proxy server
+bind = "0.0.0.0:8080"
+# Number of worker threads (optional, defaults to CPU count)
+# workers = 4
+
+# TLS Configuration (optional - uncomment for HTTPS)
+# [server.tls]
+# cert_path = "/path/to/cert.pem"
+# key_path = "/path/to/key.pem"
+
+# Logging Configuration
+[server.logging]
+# Log format: "json" (production) or "pretty" (development)
+format = "pretty"
+# Log level: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+[upstream]
+# URL of the upstream API server to proxy requests to
+url = "http://localhost:3000"
+# Connection timeout in seconds
+timeout_seconds = 30
+
+[rate_limits]
+# Layer 1: Per-IP Rate Limiting
+# If a single IP exceeds this threshold, block only that IP with HTTP 402
+per_ip_requests_per_second = 10
+
+# Layer 2: Global Rate Limiting (DDoS protection)
+# If total server load exceeds this, block ALL non-paying traffic with HTTP 402
+global_requests_per_second = 1000
+
+# Time window for rate limit calculations (in seconds)
+window_seconds = 1
+
+[x402]
+# x402 Facilitator URL (Coinbase CDP or self-hosted)
+facilitator_url = "https://x402.org/facilitator"
+
+# Your wallet address to receive payments
+recipient_address = "0xYourWalletAddressHere"
+
+# Amount to charge per request (in token units)
+amount = "0.001"
+
+# Blockchain network
+# Options: "base", "base-sepolia", "ethereum", "ethereum-sepolia"
+network = "base-sepolia"
+
+# Token contract address (USDC on Base Sepolia shown below)
+token = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+
+# Description shown to clients in payment requirements
+description = "API access payment - pay to bypass rate limits"

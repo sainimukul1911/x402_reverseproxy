@@ -1,0 +1,62 @@
+[package]
+name = "x402_reverseproxy"
+version = "0.1.0"
+edition = "2021"
+description = "A high-performance reverse proxy with x402 micropayment wall for API protection"
+license = "MIT"
+repository = "https://github.com/example/x402_reverseproxy"
+
+[[bin]]
+name = "x402-proxy"
+path = "src/main.rs"
+
+[lib]
+name = "x402_reverseproxy"
+path = "src/lib.rs"
+
+[dependencies]
+# Pingora framework
+pingora = "0.6"
+pingora-limits = "0.6"
+pingora-proxy = "0.6"
+pingora-core = "0.6"
+pingora-http = "0.6"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client for facilitator calls
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Metrics
+prometheus = "0.13"
+
+# Synchronization
+parking_lot = "0.12"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+base64 = "0.22"
+thiserror = "2"
+async-trait = "0.1"
+once_cell = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

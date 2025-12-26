@@ -1,0 +1,11 @@
+# Prometheus configuration for x402 proxy metrics
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'x402-proxy'
+    static_configs:
+      - targets: ['x402-proxy:8080']
+    metrics_path: '/metrics'

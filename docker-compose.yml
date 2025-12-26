@@ -1,0 +1,51 @@
+# x402 Reverse Proxy - Development Docker Compose
+# Usage: docker compose up
+
+services:
+  x402-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount config for easy editing
+      - ./config.toml:/app/config.toml:ro
+      # Mount TLS certs if using HTTPS
+      # - ./certs:/app/certs:ro
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Example upstream API (for testing)
+  upstream:
+    image: hashicorp/http-echo
+    command: ["-text=Hello from upstream!"]
+    ports:
+      - "3000:5678"
+
+  # Prometheus (optional - for metrics)
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    profiles:
+      - monitoring
+
+  # Grafana (optional - for dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    profiles:
+      - monitoring

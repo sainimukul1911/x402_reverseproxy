@@ -1,0 +1,28 @@
+# Build artifacts
+/target/
+
+# Docker
+.docker/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# TLS certificates (don't commit these)
+*.pem
+*.key
+*.crt
+certs/
+
+# Environment files
+.env
+.env.local
