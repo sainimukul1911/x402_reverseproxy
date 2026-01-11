@@ -16,11 +16,14 @@ path = "src/lib.rs"
 
 [dependencies]
 # Pingora framework
-pingora = "0.6"
+pingora = { version = "0.6", features = ["lb"] }
 pingora-limits = "0.6"
 pingora-proxy = "0.6"
 pingora-core = "0.6"
 pingora-http = "0.6"
+
+# URL parsing
+url = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

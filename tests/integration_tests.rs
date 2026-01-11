@@ -93,7 +93,7 @@ fn test_config_drives_behavior() {
         bind = "0.0.0.0:8080"
         
         [upstream]
-        url = "http://localhost:3000"
+        urls = ["http://localhost:3000"]
         
         [rate_limits]
         per_ip_requests_per_second = 5

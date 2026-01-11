@@ -42,6 +42,10 @@ pub struct ServerConfig {
     /// Logging configuration
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// Whether to trust X-Forwarded-For headers for client IP (for use behind load balancers)
+    #[serde(default)]
+    pub trust_forwarded_headers: bool,
 }
 
 /// TLS configuration for HTTPS
@@ -86,12 +90,20 @@ fn default_log_level() -> String {
 /// Upstream server configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpstreamConfig {
-    /// URL of the upstream server to proxy to
-    pub url: String,
+    /// URLs of the upstream servers to proxy to (load balanced)
+    pub urls: Vec<String>,
+
+    /// Load balancing strategy: "round_robin" or "random"
+    #[serde(default = "default_lb_mode")]
+    pub selection_mode: String,
 
     /// Connection timeout in seconds
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+}
+
+fn default_lb_mode() -> String {
+    "round_robin".to_string()
 }
 
 fn default_timeout() -> u64 {
@@ -112,6 +124,14 @@ pub struct RateLimitConfig {
     /// Time window for rate limiting in seconds
     #[serde(default = "default_window")]
     pub window_seconds: u64,
+
+    /// List of IPs/CIDRs to always allow (bypass rate limits)
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+
+    /// List of IPs/CIDRs to always block
+    #[serde(default)]
+    pub blocklist: Vec<String>,
 }
 
 fn default_window() -> u64 {
@@ -165,7 +185,7 @@ mod tests {
             bind = "0.0.0.0:8080"
             
             [upstream]
-            url = "http://localhost:3000"
+            urls = ["http://localhost:3000"]
             
             [rate_limits]
             per_ip_requests_per_second = 10

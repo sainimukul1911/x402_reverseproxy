@@ -10,7 +10,7 @@ use clap::Parser;
 use pingora_core::prelude::*;
 use pingora_proxy::http_proxy_service;
 use std::path::PathBuf;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use tracing_subscriber::{
     fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
@@ -102,7 +102,7 @@ fn main() {
     // Log configuration
     info!(
         bind = %config.server.bind,
-        upstream = %config.upstream.url,
+        upstream = ?config.upstream.urls,
         per_ip_limit = config.rate_limits.per_ip_requests_per_second,
         global_limit = config.rate_limits.global_requests_per_second,
         network = %config.x402.network,
@@ -116,6 +116,10 @@ fn main() {
 
     // Create the x402 proxy service
     let proxy = X402Proxy::new(config.clone());
+
+    // Create and register background cleanup task
+    let cleanup_service = proxy.create_cleanup_service();
+    server.add_service(cleanup_service);
 
     // Parse bind address
     let bind_addr = config.server.bind.clone();

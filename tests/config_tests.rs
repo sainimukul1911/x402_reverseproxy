@@ -9,7 +9,7 @@ fn test_parse_minimal_config() {
         bind = "0.0.0.0:8080"
         
         [upstream]
-        url = "http://localhost:3000"
+        urls = ["http://localhost:3000"]
         
         [rate_limits]
         per_ip_requests_per_second = 10
@@ -26,7 +26,7 @@ fn test_parse_minimal_config() {
     let config: Config = toml::from_str(toml_str).unwrap();
 
     assert_eq!(config.server.bind, "0.0.0.0:8080");
-    assert_eq!(config.upstream.url, "http://localhost:3000");
+    assert_eq!(config.upstream.urls, ["http://localhost:3000"]); // Changed to vector
     assert_eq!(config.rate_limits.per_ip_requests_per_second, 10);
     assert_eq!(config.rate_limits.global_requests_per_second, 1000);
     assert_eq!(config.x402.network, "base-sepolia");
@@ -53,7 +53,7 @@ fn test_parse_full_config() {
         level = "debug"
         
         [upstream]
-        url = "https://api.example.com"
+        urls = ["https://api.example.com"]
         timeout_seconds = 60
         
         [rate_limits]
@@ -94,7 +94,7 @@ fn test_parse_invalid_config_missing_required() {
         bind = "0.0.0.0:8080"
         
         [upstream]
-        url = "http://localhost:3000"
+        urls = ["http://localhost:3000"]
         
         # Missing rate_limits and x402 sections
     "#;
@@ -110,7 +110,7 @@ fn test_default_logging_config() {
         bind = "0.0.0.0:8080"
         
         [upstream]
-        url = "http://localhost:3000"
+        urls = ["http://localhost:3000"]
         
         [rate_limits]
         per_ip_requests_per_second = 10

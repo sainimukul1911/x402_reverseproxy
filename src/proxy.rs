@@ -4,9 +4,11 @@
 //! rate limiting, x402 payment validation, and upstream forwarding.
 
 use async_trait::async_trait;
+use pingora::lb::{selection::RoundRobin, LoadBalancer};
 use pingora_core::prelude::*;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -36,6 +38,8 @@ pub struct X402Proxy {
     rate_limiter: RateLimiter,
     /// x402 payment handler
     x402_handler: X402Handler,
+    /// Upstream Load Balancer
+    load_balancer: Arc<LoadBalancer<RoundRobin>>,
 }
 
 impl X402Proxy {
@@ -56,37 +60,73 @@ impl X402Proxy {
             config.x402.description.clone(),
         );
 
+        // Initialize Load Balancer
+        let mut upstreams = Vec::new();
+        // Support both old `url` (if we kept it) and new `urls`
+        // Since we replaced `url` with `urls` in Config, we iterate `urls`
+        for url in &config.upstream.urls {
+            let (host, port, _) = parse_upstream_url(url);
+            // Note: LoadBalancer expects valid SocketAddr or parseable string.
+            // We can use "<host>:<port>"
+            let addr = format!("{}:{}", host, port);
+            if let Ok(backends) = addr.to_socket_addrs() {
+                for backend in backends {
+                    upstreams.push(backend);
+                }
+            } else {
+                warn!("Failed to resolve upstream URL: {}", url);
+            }
+        }
+
+        // If resolution failed or no URLs, fallback to localhost to avoid crash (or panic?)
+        if upstreams.is_empty() {
+            warn!("No valid upstreams found, defaulting to 127.0.0.1:8080");
+            upstreams.push("127.0.0.1:8080".to_socket_addrs().unwrap().next().unwrap());
+        }
+
+        let lb = LoadBalancer::try_from_iter(upstreams).expect("Failed to create Load Balancer");
+        // No health check for now on upstreams, just simple Round Robin
+
         Self {
             config: Arc::new(config),
             rate_limiter,
             x402_handler,
+            load_balancer: Arc::new(lb),
         }
     }
 
     /// Extract client IP from the session.
     fn get_client_ip(&self, session: &Session) -> String {
-        // Try X-Forwarded-For header first
-        if let Some(xff) = session.req_header().headers.get("X-Forwarded-For") {
-            if let Ok(xff_str) = xff.to_str() {
-                // Take the first IP in the chain
-                if let Some(first_ip) = xff_str.split(',').next() {
-                    return first_ip.trim().to_string();
+        // Only trust X-Forwarded-For if configured
+        if self.config.server.trust_forwarded_headers {
+            // Try X-Forwarded-For header
+            if let Some(xff) = session.req_header().headers.get("X-Forwarded-For") {
+                if let Ok(xff_str) = xff.to_str() {
+                    // Take the first IP in the chain
+                    if let Some(first_ip) = xff_str.split(',').next() {
+                        return first_ip.trim().to_string();
+                    }
+                }
+            }
+
+            // Fall back to X-Real-IP
+            if let Some(real_ip) = session.req_header().headers.get("X-Real-IP") {
+                if let Ok(ip_str) = real_ip.to_str() {
+                    return ip_str.to_string();
                 }
             }
         }
 
-        // Fall back to X-Real-IP
-        if let Some(real_ip) = session.req_header().headers.get("X-Real-IP") {
-            if let Ok(ip_str) = real_ip.to_str() {
-                return ip_str.to_string();
-            }
-        }
-
-        // Fall back to peer address
+        // Fall back to peer address (always safe)
         session
             .client_addr()
             .map(|addr| addr.to_string())
             .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Create a background service to clean up stale rate limiter entries.
+    pub fn create_cleanup_service(&self) -> crate::rate_limiter::RateLimitCleaner {
+        crate::rate_limiter::RateLimitCleaner(self.rate_limiter.clone())
     }
 
     /// Check for x402 payment signature and validate if present.
@@ -147,6 +187,54 @@ impl X402Proxy {
 
         Ok(true)
     }
+
+    /// Handle Admin API requests
+    async fn handle_admin_api(
+        &self,
+        session: &mut Session,
+        path: &str,
+    ) -> pingora_core::Result<bool> {
+        if path.starts_with("/admin/ratelimits") && session.req_header().method == "POST" {
+            // Read body to update limits
+            // Note: Reading body in request_filter is tricky in Pingora if not fully buffered.
+            // Simplified: Just toggle safe defaults for demo or parse query params?
+            // Let's assume query params for simplicity: /admin/ratelimits?ip=100&global=2000
+            if let Some(query) = session.req_header().uri.query() {
+                let params: std::collections::HashMap<String, String> =
+                    url::form_urlencoded::parse(query.as_bytes())
+                        .into_owned()
+                        .collect();
+
+                if let (Some(ip), Some(global)) = (params.get("per_ip"), params.get("global")) {
+                    if let (Ok(ip_val), Ok(global_val)) = (ip.parse::<u32>(), global.parse::<u32>())
+                    {
+                        self.rate_limiter.update_limits(ip_val, global_val);
+                        info!(
+                            "Updated rate limits to: per_ip={}, global={}",
+                            ip_val, global_val
+                        );
+
+                        let body = format!(
+                            "{{\"status\": \"ok\", \"per_ip\": {}, \"global\": {}}}",
+                            ip_val, global_val
+                        );
+                        let mut resp = ResponseHeader::build(200, None)?;
+                        resp.insert_header("Content-Type", "application/json")?;
+                        session.write_response_header(Box::new(resp), false).await?;
+                        session.write_response_body(Some(body.into()), true).await?;
+                        return Ok(true);
+                    }
+                }
+            }
+
+            // Invalid request
+            let resp = ResponseHeader::build(400, None)?;
+            session.write_response_header(Box::new(resp), false).await?;
+            return Ok(true);
+        }
+
+        Ok(false) // Not handled
+    }
 }
 
 #[async_trait]
@@ -174,6 +262,13 @@ impl ProxyHttp for X402Proxy {
 
         debug!(client_ip = %ctx.client_ip, path = %ctx.path, method = %method, "Incoming request");
 
+        // Step 0.1: Check Admin API
+        if ctx.path.starts_with("/admin/") {
+            if self.handle_admin_api(session, &ctx.path).await? {
+                return Ok(true);
+            }
+        }
+
         // Step 0: Handle health/admin endpoints (bypass rate limiting)
         if health::is_admin_path(&ctx.path) {
             if let Some((status, body, content_type)) = health::handle_admin_request(&ctx.path) {
@@ -185,6 +280,20 @@ impl ProxyHttp for X402Proxy {
                     .await?;
                 return Ok(true); // Response sent, don't forward to upstream
             }
+        }
+
+        // Step 0.2: IP Allowlist/Blocklist
+        if self.config.rate_limits.blocklist.contains(&ctx.client_ip) {
+            warn!(client_ip = %ctx.client_ip, "Internal blocklist hit");
+            let resp = ResponseHeader::build(403, None)?;
+            session.write_response_header(Box::new(resp), false).await?;
+            return Ok(true);
+        }
+
+        if self.config.rate_limits.allowlist.contains(&ctx.client_ip) {
+            debug!(client_ip = %ctx.client_ip, "Allowed via allowlist");
+            metrics::record_request("allowed_whitelist", &method);
+            return Ok(false);
         }
 
         // Step 1: Check for x402 payment - if valid, bypass all rate limits
@@ -223,13 +332,40 @@ impl ProxyHttp for X402Proxy {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> pingora_core::Result<Box<HttpPeer>> {
-        // Parse upstream URL
-        let upstream_url = &self.config.upstream.url;
+        // Use Load Balancer to select upstream
+        let backend = self.load_balancer.select(b"", 256).unwrap(); // simple selection
 
-        // Simple parsing - extract host and port
-        let (host, port, tls) = parse_upstream_url(upstream_url);
+        // Note: backend is a Service wrapper or SocketAddr?
+        // LoadBalancer<RoundRobin> stores backend as whatever we passed in.
+        // But Pingora wraps it in pingora::protocols::l4::socket::SocketAddr.
 
-        let peer = HttpPeer::new((host.as_str(), port), tls, host.clone());
+        let peer_addr = backend.to_string();
+
+        // We need to determine if TLS is needed.
+        // Currently Config has `urls`. We parsed them.
+        // If we have mixed HTTP/HTTPS upstreams, we have a problem because SocketAddr doesn't store scheme.
+        // We should store a struct `UpstreamNode { addr: SocketAddr, tls: bool, sni: String }`.
+
+        // For now, let's assume all upstreams share the scheme from the FIRST url in config?
+        // Or strictly parse.
+        // Simpler: Just support all same scheme for now.
+        // Let's check the first URL in config to decide TLS.
+        let tls = self
+            .config
+            .upstream
+            .urls
+            .first()
+            .map(|u| u.starts_with("https://"))
+            .unwrap_or(false);
+        let sni = self
+            .config
+            .upstream
+            .urls
+            .first()
+            .map(|u| parse_upstream_url(u).0)
+            .unwrap_or_else(|| "localhost".to_string());
+
+        let peer = HttpPeer::new(peer_addr.as_str(), tls, sni);
         Ok(Box::new(peer))
     }
 
